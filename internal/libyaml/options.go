@@ -12,6 +12,7 @@ package libyaml
 import (
 	"errors"
 	"fmt"
+	"reflect"
 )
 
 // Options holds configuration for both loading and dumping YAML.
@@ -22,6 +23,8 @@ type Options struct {
 	UniqueKeys     bool // Enforce unique keys in mappings
 	StreamNodes    bool // Enable stream node emission
 	AllDocuments   bool // Load/Dump all documents in multi-document streams
+
+	CustomTypeUnmarshaler map[reflect.Type]CustomUnmarshaler // Apply a custom unmarshaler function to a type
 
 	// Dumping options
 	Indent                int        // Indentation spaces (2-9)
@@ -34,6 +37,8 @@ type Options struct {
 	ExplicitEnd           bool       // Always emit ...
 	FlowSimpleCollections bool       // Use flow style for simple collections
 	QuotePreference       QuoteStyle // Preferred quote style when quoting is required
+
+	CustomTypeMarshaler map[reflect.Type]CustomMarshaler // Apply a custom marshaling function to a type
 
 	// Private options (not exported, used internally)
 	FromLegacy bool // Indicates legacy Unmarshal()/Decoder path (check Unmarshaler, allow trailing content)
@@ -344,6 +349,30 @@ func WithQuotePreference(style QuoteStyle) Option {
 		default:
 			return fmt.Errorf("invalid QuoteStyle value: %d", style)
 		}
+	}
+}
+
+// WithCustomTypeMarshaler sets a functiont to be called to marshal a specific
+// type in preference to built-in or locally defined functions.
+func WithCustomTypeMarshaler(typ reflect.Type, marshaler CustomMarshaler) Option {
+	return func(o *Options) error {
+		if o.CustomTypeMarshaler == nil {
+			o.CustomTypeMarshaler = make(map[reflect.Type]CustomMarshaler)
+		}
+		o.CustomTypeMarshaler[typ] = marshaler
+		return nil
+	}
+}
+
+// WithCustomTypeUnmarshaler sets a functiont to be called to unmarshal a specific
+// type in preference to built-in or locally defined functions.
+func WithCustomTypeUnmarshaler(typ reflect.Type, unmarshaler CustomUnmarshaler) Option {
+	return func(o *Options) error {
+		if o.CustomTypeUnmarshaler == nil {
+			o.CustomTypeUnmarshaler = make(map[reflect.Type]CustomUnmarshaler)
+		}
+		o.CustomTypeUnmarshaler[typ] = unmarshaler
+		return nil
 	}
 }
 

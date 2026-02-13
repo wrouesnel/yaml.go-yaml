@@ -241,6 +241,10 @@ var (
 	//   - QuoteDouble: Use double quotes
 	//   - QuoteLegacy: Legacy v2/v3 behavior (mixed quoting)
 	WithQuotePreference = libyaml.WithQuotePreference
+
+	WithCustomTypeMarshaler = libyaml.WithCustomTypeMarshaler
+
+	WithCustomTypeUnmarshaler = libyaml.WithCustomTypeUnmarshaler
 )
 
 // Options combines multiple options into a single Option.

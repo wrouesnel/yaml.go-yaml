@@ -55,17 +55,20 @@ type Constructor struct {
 	aliasDepth     int
 
 	mergedFields map[any]bool
+
+	customTypeUnmarshalers map[reflect.Type]CustomUnmarshaler
 }
 
 // NewConstructor creates a new Constructor initialized with the provided
 // options.
 func NewConstructor(opts *Options) *Constructor {
 	return &Constructor{
-		stringMapType:  stringMapType,
-		generalMapType: generalMapType,
-		KnownFields:    opts.KnownFields,
-		UniqueKeys:     opts.UniqueKeys,
-		aliases:        make(map[*Node]bool),
+		stringMapType:          stringMapType,
+		generalMapType:         generalMapType,
+		KnownFields:            opts.KnownFields,
+		UniqueKeys:             opts.UniqueKeys,
+		aliases:                make(map[*Node]bool),
+		customTypeUnmarshalers: opts.CustomTypeUnmarshaler,
 	}
 }
 
@@ -897,6 +900,28 @@ func (c *Constructor) prepare(n *Node, out reflect.Value) (newout reflect.Value,
 			}
 			out = out.Elem()
 			again = true
+		}
+		// Check for a custom unmarshaler override
+		if c.customTypeUnmarshalers != nil {
+			if unmarshaler, found := c.customTypeUnmarshalers[out.Type()]; found {
+				err := unmarshaler(out.Interface(), n)
+				if err == nil {
+					return out, true, true
+				}
+
+				switch e := err.(type) {
+				case *LoadErrors:
+					c.TypeErrors = append(c.TypeErrors, e.Errors...)
+					return out, true, false
+				default:
+					c.TypeErrors = append(c.TypeErrors, &ConstructError{
+						Err:    e.(error),
+						Line:   n.Line,
+						Column: n.Column,
+					})
+					return out, true, false
+				}
+			}
 		}
 		if out.CanAddr() {
 			// Try yaml.Unmarshaler (from root package) first

@@ -34,6 +34,8 @@ type Representer struct {
 	explicitEnd           bool
 	flowSimpleCollections bool
 	quotePreference       QuoteStyle
+
+	customTypeMarshalers map[reflect.Type]CustomMarshaler
 }
 
 // NewRepresenter creates a new YAML representer with the given options.
@@ -45,6 +47,7 @@ func NewRepresenter(opts *Options) *Representer {
 		explicitEnd:           opts.ExplicitEnd,
 		flowSimpleCollections: opts.FlowSimpleCollections,
 		quotePreference:       opts.QuotePreference,
+		customTypeMarshalers:  opts.CustomTypeMarshaler,
 	}
 }
 
@@ -79,7 +82,23 @@ func (r *Representer) represent(tag string, in reflect.Value) *Node {
 	if !in.IsValid() || in.Kind() == reflect.Pointer && in.IsNil() {
 		return r.nilv()
 	}
+
 	iface := in.Interface()
+
+	// Check for a custom marshaler override
+	if r.customTypeMarshalers != nil {
+		if marshaler, found := r.customTypeMarshalers[in.Type()]; found {
+			v, err := marshaler(iface)
+			if err != nil {
+				Fail(err)
+			}
+			if v == nil {
+				return r.nilv()
+			}
+			return r.represent(tag, reflect.ValueOf(v))
+		}
+	}
+
 	switch value := iface.(type) {
 	case *Node:
 		return r.nodev(in)
