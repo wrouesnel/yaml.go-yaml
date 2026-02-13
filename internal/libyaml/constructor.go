@@ -39,6 +39,15 @@ type constructorAdapter interface {
 // types.
 type ScalarConstructFunc func(c *Constructor, n *Node, resolved any, out reflect.Value) bool
 
+// reentrantKey is a comparable type which allows unmarshaller functions to globally
+// prevent re-entrancy during an unmarshaling session. This is useful for singleton
+// node tree edits, such as applying default values.
+type reentrantKey struct {
+	node *Node
+	ptr  interface{}
+	typ  reflect.Type
+}
+
 // Constructor state
 type Constructor struct {
 	doc        *Node
@@ -56,6 +65,9 @@ type Constructor struct {
 	aliasDepth           int
 
 	mergedFields map[any]bool
+
+	customTypeUnmarshalers map[reflect.Type]CustomUnmarshaler
+	reentrancyGuards       map[reentrantKey]struct{}
 }
 
 // NewConstructor creates a new Constructor initialized with the provided
@@ -66,6 +78,11 @@ func NewConstructor(opts *Options) *Constructor {
 		aliasingRestrictionFunction = DefaultAliasingRestrictions
 	}
 
+	customTypeUnmarshaler := opts.CustomTypeUnmarshaler
+	if customTypeUnmarshaler == nil {
+		customTypeUnmarshaler = make(map[reflect.Type]CustomUnmarshaler)
+	}
+
 	return &Constructor{
 		stringMapType:                   stringMapType,
 		generalMapType:                  generalMapType,
@@ -73,6 +90,8 @@ func NewConstructor(opts *Options) *Constructor {
 		UniqueKeys:                      opts.UniqueKeys,
 		AliasingExceededFunc:   aliasingRestrictionFunction,
 		aliases:                         make(map[*Node]bool),
+		customTypeUnmarshalers: customTypeUnmarshaler,
+		reentrancyGuards:       make(map[reentrantKey]struct{}),
 	}
 }
 
@@ -118,7 +137,8 @@ func (c *Constructor) Construct(n *Node, out reflect.Value) (good bool) {
 	case AliasNode:
 		return c.alias(n, out)
 	}
-	out, constructed, good := c.prepare(n, out)
+	var constructed bool
+	n, out, constructed, good = c.prepare(n, out)
 	if constructed {
 		return good
 	}
@@ -699,7 +719,7 @@ func (c *Constructor) mapping(n *Node, out reflect.Value) (good bool) {
 // It handles field matching by name, inline fields, inline maps, merge keys,
 // and enforces known fields and unique keys when configured.
 func (c *Constructor) mappingStruct(n *Node, out reflect.Value) (good bool) {
-	sinfo, err := getStructInfo(out.Type())
+	sinfo, err := getStructInfo(out.Type(), c.hasCustomTypeUnmarshaler)
 	if err != nil {
 		panic(err)
 	}
@@ -713,7 +733,7 @@ func (c *Constructor) mappingStruct(n *Node, out reflect.Value) (good bool) {
 
 	for _, index := range sinfo.InlineConstructors {
 		field := c.fieldByIndex(n, out, index)
-		c.prepare(n, field)
+		c.Construct(n, field)
 	}
 
 	mergedFields := c.mergedFields
@@ -863,11 +883,13 @@ func failWantMap() {
 // its types constructed appropriately.
 //
 // If n holds a null value, prepare returns before doing anything.
-func (c *Constructor) prepare(n *Node, out reflect.Value) (newout reflect.Value, constructed, good bool) {
+func (c *Constructor) prepare(n *Node, out reflect.Value) (newnode *Node, newout reflect.Value, constructed, good bool) {
+	newnode = n
 	if n.ShortTag() == nullTag {
-		return out, false, false
+		return newnode, out, false, false
 	}
 	again := true
+againLoop:
 	for again {
 		again = false
 		if out.Kind() == reflect.Pointer {
@@ -878,24 +900,60 @@ func (c *Constructor) prepare(n *Node, out reflect.Value) (newout reflect.Value,
 			again = true
 		}
 		if out.CanAddr() {
+			// Check for a custom unmarshaler override
+			outi := out.Addr().Interface()
+			originalType := out.Type()
+			if _, guarded := c.reentrancyGuards[reentrantKey{n, outi, originalType}]; !guarded {
+				if unmarshaler, found := c.customTypeUnmarshalers[originalType]; found {
+					err := unmarshaler(outi, newnode)
+					switch e := err.(type) {
+					case nil:
+						return n, out, true, true
+					case *SubstituteError:
+						// If the substituter has supplied a new node, accept it.
+						if e.Node != nil {
+							newnode = e.Node
+						}
+						// If the substituter is requesting dereferencing of the type do it
+						if e.Dereference {
+							out = out.Elem()
+						}
+						// Prevent re-entrance unless specifically requested
+						if !e.Reentrant {
+							c.reentrancyGuards[reentrantKey{n, outi, originalType}] = struct{}{}
+						}
+						again = true
+						continue againLoop
+					case *LoadErrors:
+						c.TypeErrors = append(c.TypeErrors, e.Errors...)
+						return newnode, out, true, false
+					default:
+						c.TypeErrors = append(c.TypeErrors, &ConstructError{
+							Err:    e.(error),
+							Line:   n.Line,
+							Column: n.Column,
+						})
+						return newnode, out, true, false
+					}
+				}
+			}
 			// Try yaml.Unmarshaler (from root package) first
 			if called, good := c.tryCallYAMLConstructor(n, out); called {
-				return out, true, good
+				return newnode, out, true, good
 			}
 
-			outi := out.Addr().Interface()
 			// Check for libyaml.constructor
 			if u, ok := outi.(constructor); ok {
 				good = c.callConstructor(n, u)
-				return out, true, good
+				return newnode, out, true, good
 			}
 			if u, ok := outi.(legacyConstructor); ok {
 				good = c.callLegacyConstructor(n, u)
-				return out, true, good
+				return newnode, out, true, good
 			}
 		}
 	}
-	return out, false, false
+	return newnode, out, false, false
 }
 
 // fieldByIndex returns the struct field at the given index path, initializing
@@ -1117,4 +1175,13 @@ func (c *Constructor) getPossiblyUnhashableKey(m map[any]bool, key any) bool {
 		}
 	}()
 	return m[key]
+}
+
+// hasCustomTypeUnmarshaler returns true if the given type has a custom type
+// unmarshaler function registered in the current constructor instance.
+func (c *Constructor) hasCustomTypeUnmarshaler(p reflect.Type) bool {
+	if _, found := c.customTypeUnmarshalers[p]; found {
+		return true
+	}
+	return false
 }
