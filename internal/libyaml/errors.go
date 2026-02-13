@@ -189,6 +189,27 @@ func (e *YAMLError) Error() string {
 	return e.Err.Error()
 }
 
+// SubstituteError can be returned by an Unmarshaling function call to mutate the
+// unmarshaling process by replacing the node being unmarshalled or the output
+// being unmarshalled.
+type SubstituteError struct {
+	// Node is the YAML node which should be set as the unmarshalling target for
+	// the type.
+	Node *Node
+	// Dereference requests that the output type be resolved from its interface
+	// type. It should only be called when `out` is a pointer to an interface
+	// and the type interpretation should change to the concrete type backing
+	// that interface.
+	Dereference bool
+	// Reentrant when set to true prevents the function being locked out of being
+	// called multiple times if it's time has not changed.
+	Reentrant bool
+}
+
+func (e *SubstituteError) Error() string {
+	return fmt.Sprintf("substitute YAML node: node=%v dereference=%v reentrant=%v", e.Dereference, e.Reentrant)
+}
+
 // handleErr recovers from panics caused by yaml errors.
 // It's used in defer statements to convert YAMLError panics into regular errors.
 func handleErr(err *error) {

@@ -241,6 +241,10 @@ var (
 	//   - QuoteDouble: Use double quotes
 	//   - QuoteLegacy: Legacy v2/v3 behavior (mixed quoting)
 	WithQuotePreference = libyaml.WithQuotePreference
+
+	WithCustomTypeMarshaler = libyaml.WithCustomTypeMarshaler
+
+	WithCustomTypeUnmarshaler = libyaml.WithCustomTypeUnmarshaler
 )
 
 // Options combines multiple options into a single Option.
@@ -403,6 +407,11 @@ type (
 	//
 	//nolint:staticcheck // we are using deprecated TypeError for compatibility
 	TypeError = libyaml.TypeError
+
+	// SubstituteError may be returned by any YAML decoding function to replace
+	// the context of the current decoding with either a new output value or a
+	// new Node tree to decode.
+	SubstituteError = libyaml.SubstituteError
 )
 
 // LineBreak represents the line ending style for YAML output.
