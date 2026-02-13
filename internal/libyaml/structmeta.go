@@ -55,11 +55,24 @@ type fieldInfo struct {
 	Inline []int
 }
 
+// customConstructorCheckFn is the type which a check function for the custom
+// constructor must have.
+type customConstructorCheckFn func(p reflect.Type) bool
+
+// structMapKey defines the key for caching struct reflection information.
+// Namely, we must cache the type of check performed for inline-constructors,
+// since unmarshaling and marshaling are assymmetric in what data they should
+// return (this allows nested fields to work properly).
+type structMapKey struct {
+	st                  reflect.Type
+	hasConstructorCheck *customConstructorCheckFn
+}
+
 // structMap caches struct reflection information.
 // fieldMapMutex protects access to structMap.
 // constructorType holds the reflect.Type for the constructor interface.
 var (
-	structMap       = make(map[reflect.Type]*structInfo)
+	structMap       = make(map[structMapKey]*structInfo)
 	fieldMapMutex   sync.RWMutex
 	constructorType reflect.Type
 )
@@ -113,14 +126,24 @@ func hasConstructYAMLMethod(t reflect.Type) bool {
 	return true
 }
 
+func defaultCustomConstructorCheck(p reflect.Type) bool {
+	return false
+}
+
 // getStructInfo returns cached information about a struct type's fields.
 // It parses struct tags and builds a map of field names to field info.
-func getStructInfo(st reflect.Type) (*structInfo, error) {
+func getStructInfo(st reflect.Type, hasConstructorCheck customConstructorCheckFn) (*structInfo, error) {
 	fieldMapMutex.RLock()
-	sinfo, found := structMap[st]
+	sinfo, found := structMap[structMapKey{st, &hasConstructorCheck}]
 	fieldMapMutex.RUnlock()
 	if found {
 		return sinfo, nil
+	}
+
+	// make the interface for this function easy to use. When not supplied it
+	// should always return false
+	if hasConstructorCheck == nil {
+		hasConstructorCheck = defaultCustomConstructorCheck
 	}
 
 	n := st.NumField()
@@ -180,11 +203,13 @@ func getStructInfo(st reflect.Type) (*structInfo, error) {
 				if ftype.Kind() != reflect.Struct {
 					return nil, errors.New("option ,inline may only be used on a struct or map field")
 				}
-				// Check for both libyaml.constructor and yaml.Unmarshaler (by method name)
-				if reflect.PointerTo(ftype).Implements(constructorType) || hasConstructYAMLMethod(reflect.PointerTo(ftype)) {
+				// Check for both libyaml.constructor and yaml.Unmarshaler (by method name).
+				// Also check for a customTypeUnmarshaler in the current context.
+				ftypePtr := reflect.PointerTo(ftype)
+				if ftypePtr.Implements(constructorType) || hasConstructYAMLMethod(ftypePtr) || hasConstructorCheck(ftype) {
 					inlineConstructors = append(inlineConstructors, []int{i})
 				} else {
-					sinfo, err := getStructInfo(ftype)
+					sinfo, err := getStructInfo(ftype, hasConstructorCheck)
 					if err != nil {
 						return nil, err
 					}
@@ -236,7 +261,7 @@ func getStructInfo(st reflect.Type) (*structInfo, error) {
 	}
 
 	fieldMapMutex.Lock()
-	structMap[st] = sinfo
+	structMap[structMapKey{st, &hasConstructorCheck}] = sinfo
 	fieldMapMutex.Unlock()
 	return sinfo, nil
 }
