@@ -114,7 +114,8 @@ func (c *Constructor) Construct(n *Node, out reflect.Value) (good bool) {
 	case AliasNode:
 		return c.alias(n, out)
 	}
-	out, constructed, good := c.prepare(n, out)
+	var constructed bool
+	n, out, constructed, good = c.prepare(n, out)
 	if constructed {
 		return good
 	}
@@ -887,61 +888,78 @@ func failWantMap() {
 // its types constructed appropriately.
 //
 // If n holds a null value, prepare returns before doing anything.
-func (c *Constructor) prepare(n *Node, out reflect.Value) (newout reflect.Value, constructed, good bool) {
+func (c *Constructor) prepare(n *Node, out reflect.Value) (newnode *Node, newout reflect.Value, constructed, good bool) {
+	newnode = n
+	newout = out
 	if n.ShortTag() == nullTag {
-		return out, false, false
+		return n, newout, false, false
 	}
 	again := true
 	for again {
 		again = false
-		if out.Kind() == reflect.Pointer {
-			if out.IsNil() {
-				out.Set(reflect.New(out.Type().Elem()))
+		if newout.Kind() == reflect.Pointer {
+			if newout.IsNil() {
+				newout.Set(reflect.New(newout.Type().Elem()))
 			}
-			out = out.Elem()
+			newout = newout.Elem()
 			again = true
 		}
-		// Check for a custom unmarshaler override
-		if c.customTypeUnmarshalers != nil {
-			if unmarshaler, found := c.customTypeUnmarshalers[out.Type()]; found {
-				err := unmarshaler(out.Interface(), n)
-				if err == nil {
-					return out, true, true
-				}
-
-				switch e := err.(type) {
-				case *LoadErrors:
-					c.TypeErrors = append(c.TypeErrors, e.Errors...)
-					return out, true, false
-				default:
-					c.TypeErrors = append(c.TypeErrors, &ConstructError{
-						Err:    e.(error),
-						Line:   n.Line,
-						Column: n.Column,
-					})
-					return out, true, false
+		if newout.CanAddr() {
+			// Check for a custom unmarshaler override
+			if c.customTypeUnmarshalers != nil {
+				if unmarshaler, found := c.customTypeUnmarshalers[newout.Type()]; found {
+					newnode, good, constructed, again = c.handleUnmarshalerError(newnode, unmarshaler(newout.Addr().Interface(), n))
+					newout = newout.Elem()
+					continue
 				}
 			}
-		}
-		if out.CanAddr() {
 			// Try yaml.Unmarshaler (from root package) first
-			if called, good := c.tryCallYAMLConstructor(n, out); called {
-				return out, true, good
+			if called, err := c.tryCallYAMLConstructor(n, newout); called {
+				newnode, good, constructed, again = c.handleUnmarshalerError(newnode, err)
 			}
 
-			outi := out.Addr().Interface()
+			outi := newout.Addr().Interface()
 			// Check for libyaml.constructor
 			if u, ok := outi.(constructor); ok {
-				good = c.callConstructor(n, u)
-				return out, true, good
+				newnode, good, constructed, again = c.handleUnmarshalerError(newnode, u.UnmarshalYAML(n))
+				continue
 			}
 			if u, ok := outi.(legacyConstructor); ok {
-				good = c.callLegacyConstructor(n, u)
-				return out, true, good
+				terrlen := len(c.TypeErrors)
+				err := u.UnmarshalYAML(func(v any) (err error) {
+					defer handleErr(&err)
+					c.Construct(newnode, reflect.ValueOf(v))
+					if len(c.TypeErrors) > terrlen {
+						issues := c.TypeErrors[terrlen:]
+						c.TypeErrors = c.TypeErrors[:terrlen]
+						return &LoadErrors{issues}
+					}
+					return nil
+				})
+				newnode, good, constructed, again = c.handleUnmarshalerError(n, err)
+				continue
 			}
 		}
 	}
-	return out, false, false
+	return
+}
+
+func (c *Constructor) handleUnmarshalerError(n *Node, err error) (newnode *Node, good bool, constructed bool, again bool) {
+	switch e := err.(type) {
+	// If unmarshaler returned a request to try again, let it try again.
+	case *SubstituteError:
+		return e.Node, false, false, true
+	case *LoadErrors:
+		c.TypeErrors = append(c.TypeErrors, e.Errors...)
+		return n, true, false, false
+	default:
+		c.TypeErrors = append(c.TypeErrors, &ConstructError{
+			Err:    e.(error),
+			Line:   n.Line,
+			Column: n.Column,
+		})
+		return n, true, false, false
+	}
 }
 
 // fieldByIndex returns the struct field at the given index path, initializing
@@ -970,39 +988,39 @@ func (c *Constructor) fieldByIndex(n *Node, v reflect.Value, index []int) (field
 // takes a *yaml.Node (from the root package) and calls it if found.
 // This handles the case where user types implement yaml.Unmarshaler instead of
 // libyaml.constructor.
-func (c *Constructor) tryCallYAMLConstructor(n *Node, out reflect.Value) (called bool, good bool) {
+func (c *Constructor) tryCallYAMLConstructor(n *Node, out reflect.Value) (called bool, err error) {
 	if !out.CanAddr() {
-		return false, false
+		return false, nil
 	}
 
 	addr := out.Addr()
 	// Check for UnmarshalYAML method
 	method := addr.MethodByName("UnmarshalYAML")
 	if !method.IsValid() {
-		return false, false
+		return false, nil
 	}
 
 	// Check method signature: func(*yaml.Node) error
 	mtype := method.Type()
 	if mtype.NumIn() != 1 || mtype.NumOut() != 1 {
-		return false, false
+		return false, nil
 	}
 
 	// Check if parameter is a pointer to a Node-like struct
 	paramType := mtype.In(0)
 	if paramType.Kind() != reflect.Ptr {
-		return false, false
+		return false, nil
 	}
 
 	elemType := paramType.Elem()
 	if elemType.Kind() != reflect.Struct {
-		return false, false
+		return false, nil
 	}
 
 	// Check if it's the same underlying type as our Node
 	// Both yaml.Node and libyaml.Node have the same structure
 	if elemType.Name() != "Node" {
-		return false, false
+		return false, nil
 	}
 
 	// Call the method with a converted node
@@ -1011,74 +1029,9 @@ func (c *Constructor) tryCallYAMLConstructor(n *Node, out reflect.Value) (called
 	nodeValue := reflect.NewAt(elemType, reflect.ValueOf(n).UnsafePointer())
 
 	results := method.Call([]reflect.Value{nodeValue})
-	err := results[0].Interface()
+	err = results[0].Interface().(error)
 
-	if err == nil {
-		return true, true
-	}
-
-	switch e := err.(type) {
-	case *LoadErrors:
-		c.TypeErrors = append(c.TypeErrors, e.Errors...)
-		return true, false
-	default:
-		c.TypeErrors = append(c.TypeErrors, &ConstructError{
-			Err:    e.(error),
-			Line:   n.Line,
-			Column: n.Column,
-		})
-		return true, false
-	}
-}
-
-// callConstructor invokes the UnmarshalYAML method on a value implementing
-// the constructor interface, handling errors appropriately.
-func (c *Constructor) callConstructor(n *Node, u constructor) (good bool) {
-	err := u.UnmarshalYAML(n)
-	switch e := err.(type) {
-	case nil:
-		return true
-	case *LoadErrors:
-		c.TypeErrors = append(c.TypeErrors, e.Errors...)
-		return false
-	default:
-		c.TypeErrors = append(c.TypeErrors, &ConstructError{
-			Err:    err,
-			Line:   n.Line,
-			Column: n.Column,
-		})
-		return false
-	}
-}
-
-// callLegacyConstructor invokes the UnmarshalYAML method on a value
-// implementing the old-style legacyConstructor interface.
-func (c *Constructor) callLegacyConstructor(n *Node, u legacyConstructor) (good bool) {
-	terrlen := len(c.TypeErrors)
-	err := u.UnmarshalYAML(func(v any) (err error) {
-		defer handleErr(&err)
-		c.Construct(n, reflect.ValueOf(v))
-		if len(c.TypeErrors) > terrlen {
-			issues := c.TypeErrors[terrlen:]
-			c.TypeErrors = c.TypeErrors[:terrlen]
-			return &LoadErrors{issues}
-		}
-		return nil
-	})
-	switch e := err.(type) {
-	case nil:
-		return true
-	case *LoadErrors:
-		c.TypeErrors = append(c.TypeErrors, e.Errors...)
-		return false
-	default:
-		c.TypeErrors = append(c.TypeErrors, &ConstructError{
-			Err:    err,
-			Line:   n.Line,
-			Column: n.Column,
-		})
-		return false
-	}
+	return true, err
 }
 
 // tagError records a type construction error indicating that a node with a

@@ -189,6 +189,16 @@ func (e *YAMLError) Error() string {
 	return e.Err.Error()
 }
 
+// SubstituteError can be returned by an Unmarshaling function call to mutate the
+// unmarshaling process by replacing the node being unmarshalled.
+type SubstituteError struct {
+	Node *Node
+}
+
+func (e *SubstituteError) Error() string {
+	return "substitute YAML node"
+}
+
 // handleErr recovers from panics caused by yaml errors.
 // It's used in defer statements to convert YAMLError panics into regular errors.
 func handleErr(err *error) {
