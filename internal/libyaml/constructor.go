@@ -90,8 +90,8 @@ func NewConstructor(opts *Options) *Constructor {
 		UniqueKeys:                      opts.UniqueKeys,
 		AliasingExceededFunc:   aliasingRestrictionFunction,
 		aliases:                         make(map[*Node]bool),
-		customTypeUnmarshalers: customTypeUnmarshaler,
-		reentrancyGuards:       make(map[reentrantKey]struct{}),
+		customTypeUnmarshalers:          customTypeUnmarshaler,
+		reentrancyGuards:                make(map[reentrantKey]struct{}),
 	}
 }
 
@@ -122,15 +122,15 @@ func (c *Constructor) Construct(n *Node, out reflect.Value) (good bool) {
 	//
 	// Note that this matches the behavior of both encoding/json and
 	// encoding/json/v2.
-	if n.Kind != ScalarNode && isTextUnmarshaler(out) {
-		err := fmt.Errorf("cannot construct %s into %s (TextUnmarshaler)", shortTag(n.Tag), out.Type())
-		c.TypeErrors = append(c.TypeErrors, &ConstructError{
-			Err:    err,
-			Line:   n.Line,
-			Column: n.Column,
-		})
-		return false
-	}
+	//if n.Kind != ScalarNode && isTextUnmarshaler(out) {
+	//	err := fmt.Errorf("cannot construct %s into %s (TextUnmarshaler)", shortTag(n.Tag), out.Type())
+	//	c.TypeErrors = append(c.TypeErrors, &ConstructError{
+	//		Err:    err,
+	//		Line:   n.Line,
+	//		Column: n.Column,
+	//	})
+	//	return false
+	//}
 	switch n.Kind {
 	case DocumentNode:
 		return c.document(n, out)
