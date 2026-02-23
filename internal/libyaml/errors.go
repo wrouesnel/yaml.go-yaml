@@ -201,13 +201,13 @@ type SubstituteError struct {
 	// and the type interpretation should change to the concrete type backing
 	// that interface.
 	Dereference bool
-	// Reentrant when set to true prevents the function being locked out of being
-	// called multiple times if it's time has not changed.
-	Reentrant bool
+	// Once when set to true prevents the same object from having the constructor
+	// function called per decoding session.
+	Once bool
 }
 
 func (e *SubstituteError) Error() string {
-	return fmt.Sprintf("substitute YAML node: node=%v dereference=%v reentrant=%v", e.Node != nil, e.Dereference, e.Reentrant)
+	return fmt.Sprintf("substitute YAML node: node=%v dereference=%v once=%v", e.Node != nil, e.Dereference, e.Once)
 }
 
 // handleErr recovers from panics caused by yaml errors.

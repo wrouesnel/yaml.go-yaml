@@ -43,9 +43,8 @@ type ScalarConstructFunc func(c *Constructor, n *Node, resolved any, out reflect
 // prevent re-entrancy during an unmarshaling session. This is useful for singleton
 // node tree edits, such as applying default values.
 type reentrantKey struct {
-	node *Node
-	ptr  interface{}
-	typ  reflect.Type
+	ptr interface{}
+	typ reflect.Type
 }
 
 // Constructor state
@@ -84,14 +83,14 @@ func NewConstructor(opts *Options) *Constructor {
 	}
 
 	return &Constructor{
-		stringMapType:                   stringMapType,
-		generalMapType:                  generalMapType,
-		KnownFields:                     opts.KnownFields,
-		UniqueKeys:                      opts.UniqueKeys,
+		stringMapType:          stringMapType,
+		generalMapType:         generalMapType,
+		KnownFields:            opts.KnownFields,
+		UniqueKeys:             opts.UniqueKeys,
 		AliasingExceededFunc:   aliasingRestrictionFunction,
-		aliases:                         make(map[*Node]bool),
-		customTypeUnmarshalers:          customTypeUnmarshaler,
-		reentrancyGuards:                make(map[reentrantKey]struct{}),
+		aliases:                make(map[*Node]bool),
+		customTypeUnmarshalers: customTypeUnmarshaler,
+		reentrancyGuards:       map[reentrantKey]struct{}{},
 	}
 }
 
@@ -888,6 +887,7 @@ func (c *Constructor) prepare(n *Node, out reflect.Value) (newnode *Node, newout
 	if n.ShortTag() == nullTag {
 		return newnode, out, false, false
 	}
+
 	again := true
 againLoop:
 	for again {
@@ -903,7 +903,7 @@ againLoop:
 			// Check for a custom unmarshaler override
 			outi := out.Addr().Interface()
 			originalType := out.Type()
-			if _, guarded := c.reentrancyGuards[reentrantKey{n, outi, originalType}]; !guarded {
+			if _, guarded := c.reentrancyGuards[reentrantKey{outi, originalType}]; !guarded {
 				if unmarshaler, found := c.customTypeUnmarshalers[originalType]; found {
 					err := unmarshaler(outi, newnode)
 					switch e := err.(type) {
@@ -919,8 +919,8 @@ againLoop:
 							out = out.Elem()
 						}
 						// Prevent re-entrance unless specifically requested
-						if !e.Reentrant {
-							c.reentrancyGuards[reentrantKey{n, outi, originalType}] = struct{}{}
+						if e.Once {
+							c.reentrancyGuards[reentrantKey{outi, originalType}] = struct{}{}
 						}
 						again = true
 						continue againLoop
