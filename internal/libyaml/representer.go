@@ -192,7 +192,7 @@ func (r *Representer) mapv(tag string, in reflect.Value) *Node {
 // structv converts a Go struct to a YAML mapping node, handling field tags,
 // omitempty, inline fields, and inline maps.
 func (r *Representer) structv(tag string, in reflect.Value) *Node {
-	sinfo, err := getStructInfo(in.Type(), nil)
+	sinfo, err := getStructInfo(in.Type(), nil, nil)
 	if err != nil {
 		panic(err)
 	}

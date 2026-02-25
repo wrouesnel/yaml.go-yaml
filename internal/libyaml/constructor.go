@@ -67,6 +67,9 @@ type Constructor struct {
 
 	customTypeUnmarshalers map[reflect.Type]CustomUnmarshaler
 	reentrancyGuards       map[reentrantKey]struct{}
+	// localFieldMap caches structinfo lookups when custom unmarshalers are
+	// being used.
+	localFieldMap map[structMapKey]*structInfo
 }
 
 // NewConstructor creates a new Constructor initialized with the provided
@@ -91,6 +94,7 @@ func NewConstructor(opts *Options) *Constructor {
 		aliases:                make(map[*Node]bool),
 		customTypeUnmarshalers: customTypeUnmarshaler,
 		reentrancyGuards:       map[reentrantKey]struct{}{},
+		localFieldMap:          map[structMapKey]*structInfo{},
 	}
 }
 
@@ -718,7 +722,7 @@ func (c *Constructor) mapping(n *Node, out reflect.Value) (good bool) {
 // It handles field matching by name, inline fields, inline maps, merge keys,
 // and enforces known fields and unique keys when configured.
 func (c *Constructor) mappingStruct(n *Node, out reflect.Value) (good bool) {
-	sinfo, err := getStructInfo(out.Type(), c.hasCustomTypeUnmarshaler)
+	sinfo, err := getStructInfo(out.Type(), c.hasCustomTypeUnmarshaler, c.localFieldMap)
 	if err != nil {
 		panic(err)
 	}
