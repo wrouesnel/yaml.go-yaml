@@ -762,9 +762,13 @@ func (c *Constructor) mappingStruct(n *Node, out reflect.Value) (good bool) {
 			if mergedFields[sname] {
 				continue
 			}
-			mergedFields[sname] = true
+			// See below - fields are only marked as merged if they're actually
+			// handled by this object type.
 		}
 		if info, ok := sinfo.FieldsMap[sname]; ok {
+			if mergedFields != nil {
+				mergedFields[sname] = true
+			}
 			if c.UniqueKeys {
 				if doneFields[info.Id] {
 					c.TypeErrors = append(c.TypeErrors, &ConstructError{
@@ -784,6 +788,9 @@ func (c *Constructor) mappingStruct(n *Node, out reflect.Value) (good bool) {
 			}
 			c.Construct(n.Content[i+1], field)
 		} else if sinfo.InlineMap != -1 {
+			if mergedFields != nil {
+				mergedFields[sname] = true
+			}
 			if inlineMap.IsNil() {
 				inlineMap.Set(reflect.MakeMap(inlineMap.Type()))
 			}
