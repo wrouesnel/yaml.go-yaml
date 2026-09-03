@@ -65,9 +65,10 @@ type Constructor struct {
 
 	mergedFields map[any]bool
 
-	customTypeUnmarshalers map[reflect.Type]CustomUnmarshaler
-	reentrancyGuards       map[reentrantKey]struct{}
-	constructorExclusions  map[interface{}]struct{}
+	customTypeUnmarshalers    map[reflect.Type]CustomUnmarshaler
+	customPointerUnmarshalers map[interface{}]CustomUnmarshaler
+	reentrancyGuards          map[reentrantKey]struct{}
+	constructorExclusions     map[interface{}]struct{}
 	// localFieldMap caches structinfo lookups when custom unmarshalers are
 	// being used.
 	localFieldMap map[structMapKey]*structInfo
@@ -81,22 +82,28 @@ func NewConstructor(opts *Options) *Constructor {
 		customTypeUnmarshaler = make(map[reflect.Type]CustomUnmarshaler)
 	}
 
+	customPointerUnmarshaler := opts.CustomPointerUnmarshaler
+	if customPointerUnmarshaler == nil {
+		customPointerUnmarshaler = make(map[interface{}]CustomUnmarshaler)
+	}
+
 	constructorExclusions := opts.ConstructorExclusions
 	if constructorExclusions == nil {
 		constructorExclusions = make(map[interface{}]struct{})
 	}
 
 	return &Constructor{
-		stringMapType:          stringMapType,
-		generalMapType:         generalMapType,
-		KnownFields:            opts.KnownFields,
-		UniqueKeys:             opts.UniqueKeys,
-		aliases:                make(map[*Node]bool),
-		aliasCheck:             opts.AliasCheck,
-		customTypeUnmarshalers: customTypeUnmarshaler,
-		reentrancyGuards:       make(map[reentrantKey]struct{}),
-		constructorExclusions:  constructorExclusions,
-		localFieldMap:          map[structMapKey]*structInfo{},
+		stringMapType:             stringMapType,
+		generalMapType:            generalMapType,
+		KnownFields:               opts.KnownFields,
+		UniqueKeys:                opts.UniqueKeys,
+		aliases:                   make(map[*Node]bool),
+		aliasCheck:                opts.AliasCheck,
+		customTypeUnmarshalers:    customTypeUnmarshaler,
+		customPointerUnmarshalers: customPointerUnmarshaler,
+		reentrancyGuards:          make(map[reentrantKey]struct{}),
+		constructorExclusions:     constructorExclusions,
+		localFieldMap:             map[structMapKey]*structInfo{},
 	}
 }
 
@@ -922,6 +929,40 @@ againLoop:
 			// Check for a custom unmarshaler override
 			outi := out.Addr().Interface()
 			originalType := out.Type()
+			// Check for a pointer specific constructor override. This follows the same logic
+			// as  atype specific override.
+			if unmarshaler, found := c.customPointerUnmarshalers[outi]; found {
+				err := unmarshaler(outi, newnode)
+				switch e := err.(type) {
+				case nil:
+					return n, out, true, true
+				case *SubstituteError:
+					// If the substituter has supplied a new node, accept it.
+					if e.Node != nil {
+						newnode = e.Node
+					}
+					// If the substituter is requesting dereferencing of the type do it
+					if e.Dereference {
+						out = out.Elem()
+					}
+					// Prevent re-entrance if requested
+					if e.Once {
+						c.reentrancyGuards[reentrantKey{outi, originalType}] = struct{}{}
+					}
+					again = true
+					continue againLoop
+				case *LoadErrors:
+					c.TypeErrors = append(c.TypeErrors, e.Errors...)
+					return newnode, out, true, false
+				default:
+					c.TypeErrors = append(c.TypeErrors, formatConstructorError(
+						err.(error),
+						Mark{Line: n.Line, Column: n.Column},
+					))
+					return newnode, out, true, false
+				}
+			}
+			// Check for a type specific override
 			if _, guarded := c.reentrancyGuards[reentrantKey{outi, originalType}]; !guarded {
 				if unmarshaler, found := c.customTypeUnmarshalers[originalType]; found {
 					err := unmarshaler(outi, newnode)
@@ -937,7 +978,7 @@ againLoop:
 						if e.Dereference {
 							out = out.Elem()
 						}
-						// Prevent re-entrance unless specifically requested
+						// Prevent re-entrance if requested
 						if e.Once {
 							c.reentrancyGuards[reentrantKey{outi, originalType}] = struct{}{}
 						}
