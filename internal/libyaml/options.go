@@ -16,26 +16,28 @@ import (
 // Options holds configuration for both loading and dumping YAML.
 type Options struct {
 	// Loading options
-	KnownFields           bool                               // Enforce known fields in structs
-	SingleDocument        bool                               // Only load first document
-	UniqueKeys            bool                               // Enforce unique keys in mappings
-	StreamNodes           bool                               // Enable stream node emission
-	AllDocuments          bool                               // Load/Dump all documents in multi-document streams
-	CustomTypeUnmarshaler map[reflect.Type]CustomUnmarshaler // Apply a custom unmarshaler function to a type
-	ConstructorExclusions map[interface{}]struct{}           // Selectively exclude pointers from constructor function usage
+	KnownFields              bool                               // Enforce known fields in structs
+	SingleDocument           bool                               // Only load first document
+	UniqueKeys               bool                               // Enforce unique keys in mappings
+	StreamNodes              bool                               // Enable stream node emission
+	AllDocuments             bool                               // Load/Dump all documents in multi-document streams
+	CustomTypeUnmarshaler    map[reflect.Type]CustomUnmarshaler // Apply a custom unmarshaler function to a type
+	CustomPointerUnmarshaler map[interface{}]CustomUnmarshaler  // Apply a custom unmarshaler if the target is the given target pointer
+	ConstructorExclusions    map[interface{}]struct{}           // Selectively exclude pointers from constructor function usage
 
 	// Dumping options
-	Indent                int                              // Indentation spaces (2-9)
-	CompactSeqIndent      bool                             // Whether '- ' counts as indentation
-	LineWidth             int                              // Preferred line width (-1 for unlimited)
-	Unicode               bool                             // Allow non-ASCII characters
-	Canonical             bool                             // Canonical YAML output
-	LineBreak             LineBreak                        // Line ending style
-	ExplicitStart         bool                             // Always emit ---
-	ExplicitEnd           bool                             // Always emit ...
-	FlowSimpleCollections bool                             // Use flow style for simple collections
-	QuotePreference       QuoteStyle                       // Preferred quote style when quoting is required
-	CustomTypeMarshaler   map[reflect.Type]CustomMarshaler // Apply a custom marshaling function to a type
+	Indent                 int                              // Indentation spaces (2-9)
+	CompactSeqIndent       bool                             // Whether '- ' counts as indentation
+	LineWidth              int                              // Preferred line width (-1 for unlimited)
+	Unicode                bool                             // Allow non-ASCII characters
+	Canonical              bool                             // Canonical YAML output
+	LineBreak              LineBreak                        // Line ending style
+	ExplicitStart          bool                             // Always emit ---
+	ExplicitEnd            bool                             // Always emit ...
+	FlowSimpleCollections  bool                             // Use flow style for simple collections
+	QuotePreference        QuoteStyle                       // Preferred quote style when quoting is required
+	CustomTypeMarshaler    map[reflect.Type]CustomMarshaler // Apply a custom marshaling function to a type
+	CustomPointerMarshaler map[interface{}]CustomMarshaler  // Apply a custom marshaler if the target is the given target pointer
 
 	// Safety limit checks (set by ApplyOptions or WithPlugin(limit.New(...)))
 	DepthCheck func(depth int, ctx *DepthContext) error
@@ -423,6 +425,36 @@ func WithCustomTypeUnmarshaler(typ reflect.Type, unmarshaler CustomUnmarshaler) 
 			o.CustomTypeUnmarshaler = make(map[reflect.Type]CustomUnmarshaler)
 		}
 		o.CustomTypeUnmarshaler[typ] = unmarshaler
+		return nil
+	}
+}
+
+// WithCustomPointerMarshaler sets the given pointer to use a custom marshaler
+// function, rather than any which would be loaded via normal means. It is only
+// useful to use as an option for node-deserialization when a pointer address
+// on a struct is known in advance. This can be used to implement context-aware
+// marshaling.
+func WithCustomPointerMarshaler(ptr interface{}, marshaler CustomMarshaler) Option {
+	return func(o *Options) error {
+		if o.CustomPointerMarshaler == nil {
+			o.CustomPointerMarshaler = make(map[interface{}]CustomMarshaler)
+		}
+		o.CustomPointerMarshaler[ptr] = marshaler
+		return nil
+	}
+}
+
+// WithCustomPointerUnmarshaler sets the given pointer to use a custom unmarshaler
+// function, rather than any which would be loaded via normal means. It is only
+// useful to use as an option for node-deserialization when a pointer address
+// on a struct is known in advance. This can be used to implement context-aware
+// marshaling.
+func WithCustomPointerUnmarshaler(ptr interface{}, unmarshaler CustomUnmarshaler) Option {
+	return func(o *Options) error {
+		if o.CustomPointerUnmarshaler == nil {
+			o.CustomPointerUnmarshaler = make(map[interface{}]CustomUnmarshaler)
+		}
+		o.CustomPointerUnmarshaler[ptr] = unmarshaler
 		return nil
 	}
 }

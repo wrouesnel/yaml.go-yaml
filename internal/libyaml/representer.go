@@ -34,7 +34,8 @@ type Representer struct {
 	flowSimpleCollections bool
 	quotePreference       QuoteStyle
 
-	customTypeMarshalers map[reflect.Type]CustomMarshaler
+	customTypeMarshalers    map[reflect.Type]CustomMarshaler
+	customPointerMarshalers map[interface{}]CustomMarshaler
 }
 
 // NewRepresenter creates a new YAML representer with the given options.
@@ -44,14 +45,20 @@ func NewRepresenter(opts *Options) *Representer {
 		customTypeMarshaler = make(map[reflect.Type]CustomMarshaler)
 	}
 
+	customPointerMarshaler := opts.CustomPointerMarshaler
+	if customPointerMarshaler == nil {
+		customPointerMarshaler = make(map[interface{}]CustomMarshaler)
+	}
+
 	return &Representer{
-		Indent:                opts.Indent,
-		lineWidth:             opts.LineWidth,
-		explicitStart:         opts.ExplicitStart,
-		explicitEnd:           opts.ExplicitEnd,
-		flowSimpleCollections: opts.FlowSimpleCollections,
-		quotePreference:       opts.QuotePreference,
-		customTypeMarshalers:  customTypeMarshaler,
+		Indent:                  opts.Indent,
+		lineWidth:               opts.LineWidth,
+		explicitStart:           opts.ExplicitStart,
+		explicitEnd:             opts.ExplicitEnd,
+		flowSimpleCollections:   opts.FlowSimpleCollections,
+		quotePreference:         opts.QuotePreference,
+		customTypeMarshalers:    customTypeMarshaler,
+		customPointerMarshalers: customPointerMarshaler,
 	}
 }
 
@@ -89,7 +96,18 @@ func (r *Representer) represent(tag string, in reflect.Value) *Node {
 
 	iface := in.Interface()
 
-	// Check for a custom marshaler override
+	// Check for a custom marshaler override for this specific value
+	if marshaler, found := r.customPointerMarshalers[iface]; found {
+		v, err := marshaler(iface)
+		if err != nil {
+			Fail(err)
+		}
+		if v == nil {
+			return r.nilv()
+		}
+		return r.represent(tag, reflect.ValueOf(v))
+	}
+	// Check for a custom marshaler override for this type
 	if marshaler, found := r.customTypeMarshalers[in.Type()]; found {
 		v, err := marshaler(iface)
 		if err != nil {
